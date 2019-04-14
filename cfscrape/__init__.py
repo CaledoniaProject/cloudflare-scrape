@@ -160,7 +160,7 @@ var result  = require('vm').runInNewContext(decoded, Object.create(null), {timeo
 console.log(result)
 ''' % base64.b64encode(js)
 
-        print js
+        # print js
 
         try:
             result = subprocess.check_output(["node", "-e", js]).strip()
