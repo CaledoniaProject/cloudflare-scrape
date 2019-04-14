@@ -3,6 +3,7 @@ import random
 import re
 import subprocess
 import copy
+import base64
 import time
 
 from requests.sessions import Session
@@ -120,19 +121,46 @@ class CloudflareScraper(Session):
         except Exception:
             raise ValueError("Unable to identify Cloudflare IUAM Javascript on website. %s" % BUG_REPORT)
 
-        js = re.sub(r"a\.value = (.+ \+ t\.length(\).toFixed\(10\))?).+", r"\1", js)
-        js = re.sub(r"\s{3,}[a-z](?: = |\.).+", "", js).replace("t.length", str(len(domain)))
+        # print "=====\n\n", body, "\n\n=====\n\n"
 
-        # Strip characters that could be used to exit the string context
-        # These characters are not currently used in Cloudflare's arithmetic snippet
-        js = re.sub(r"[\n\\']", "", js)
+        concat = False
+        result = []
+        for line in body.split("\n"):
+            if 's,t,o,p,b,r,e,a,k,i,n,g,f' in line:
+                concat = True
+            elif 't = document.createElement' in line:
+                result.append('t = "' + domain + '"; a = {}')
+                continue
+            # t.innerHTML="<a href='/'>x</a>";
+            # t = t.firstChild.href;r = t.match(/https?:\/\//)[0];
+            # t = t.substr(r.length); t = t.substr(0,t.length-1);
+            # f = document.getElementById('challenge-form');
+            elif re.search(r'^\s*(t =|t\.|\w = document\.)', line):
+                continue
+            elif 'f.action +=' in line:
+                concat = False
+                break
+
+            if concat:
+                result.append(line)
+
+        result.append('a.value')
+
+        js = "\n".join(result)
 
         if "toFixed" not in js:
             raise ValueError("Error parsing Cloudflare IUAM Javascript challenge. %s" % BUG_REPORT)
 
         # Use vm.runInNewContext to safely evaluate code
         # The sandboxed code cannot use the Node.js standard library
-        js = "console.log(require('vm').runInNewContext('%s', Object.create(null), {timeout: 5000}));" % js
+        js = '''
+var encoded = '%s'
+var decoded = new Buffer(encoded, 'base64').toString('ascii')
+var result  = require('vm').runInNewContext(decoded, Object.create(null), {timeout: 5000})
+console.log(result)
+''' % base64.b64encode(js)
+
+        print js
 
         try:
             result = subprocess.check_output(["node", "-e", js]).strip()
